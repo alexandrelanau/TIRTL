@@ -1,50 +1,86 @@
-# TIRTL-seq data analysis pipeline
-Code for paired TCR data analysis from TIRTL-seq experiments. Please see the [paper](https://www.nature.com/articles/s41592-025-02907-9) for details. Data for the manuscript is available at Zenodo [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14010377.svg)](https://doi.org/10.5281/zenodo.14010377). More functions for TIRTL-seq data analysis and visualization are available in actively developing [TIRTLtools](https://github.com/NicholasClark/TIRTLtools) R package.
+# tirtl: TIRTL-seq paired TCR analysis in Python (Rust backend)
+Code for paired TCR data analysis from TIRTL-seq experiments. Please see the [paper](https://www.nature.com/articles/s41592-025-02907-9) for details. Data for the manuscript is available at Zenodo [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14010377.svg)](https://doi.org/10.5281/zenodo.14010377).
+
+`tirtl` is a Python package that reproduces:
+* the original TIRTL R pipeline: MAD-HYPE + T-SHELL pairing, pseudobulk, and the multi-run analyses;
+* the pairing, data-processing and diversity functions of the [TIRTLtools](https://github.com/NicholasClark/TIRTLtools) R package (0.2.9).
+
+It gives the same pairs and tables as the R code. The heavy steps run in Rust (multi-threaded CPU), and NVIDIA (cupy) and Apple Silicon (mlx) GPUs can be used for the dense correlation products.
+
+![speed on public data](docs/benchmark_public.png)
 
 ## Installation
-### Requirements
-
-For Nvidia GPU functionality you will need to have CUDA installed. You can install it from [here](https://developer.nvidia.com/cuda-downloads).
-For Apple Silicon GPU install Apple MLX library from [here](https://github.com/ml-explore/mlx).
-
-
-
-R dependencies are _Matrix_ (vesrsion >=1.5) and _data.table_ (v.>1.15) packages, available by default with most distributions. If not, you can install them by running from R console:
-```R
-install.packages("Matrix")
-install.packages("data.table")
-```
-
-Python3 dependencies are _numpy_ (v.>1.26), _pandas_ (v.>2.2), _cupy_ (v. >13.2 for Nvidia GPU runs, optional), _mlx_ (v. >=0.13 for Apple GPU runs, optional). You can install them by running:
+A Rust toolchain ([rustup](https://rustup.rs)) is needed to build the extension:
 ```bash
-pip install numpy pandas
-pip install cupy
-pip install mlx
+pip install -e .            # or: pip install maturin && maturin develop --release
+pip install cupy-cuda12x    # optional, NVIDIA GPU
+pip install mlx             # optional, Apple Silicon GPU
 ```
+Requirements: Python >= 3.9, numpy, pandas, scipy (pyarrow recommended).
+Without the compiled extension a pure-Python fallback is used (same results, much slower).
+With a conda CUDA toolkit, cupy needs `CUDA_PATH=$CONDA_PREFIX/targets/x86_64-linux`; the package sets it automatically when it is missing.
 
-If the dependencies are installed, just copying the repository is enough to run the code, no additional install or setup needed.
-The code was tested on macOS 14-15 (CPU/GPU), Red Hat Enterprise Linux 8.8 (CPU/Nvidia GPU) and Windows 11 Enterprise (tested on CPU only).
+## Quick start
+The notebook [`tutorial.ipynb`](tutorial.ipynb) walks through the package on the public data of the paper (Zenodo, experiment 3: ID03, ID02 and 10x).
 
-## Quick Start
-Install dependencies, download repository and run the following commands in R:
-```R
-source("TIRTL_functions.R")
-# to run on cpu
-test<-run_single_point_analysis_sub_gpu("data/")
-# to run on Nvidia gpu
-test_gpu_nvidia<-run_single_point_analysis_sub_gpu("data/",backend="cupy")
-# to run on Apple Silicon gpu
-test_gpu_apple<-run_single_point_analysis_sub_gpu("data/",backend="mlx")
-# to run on 192 wells, first 12 columns of 384-well plate
-test_half_plate<-run_single_point_analysis_sub_gpu("data/",wellset1=get_well_subset(1:16,1:12))
-# DEMO! lets run on the small dataset from the manuscript (download and unpack data from zenodo https://doi.org/10.5281/zenodo.14010377 first!)
-# This test takes ~6 minutes on CPU on a 2021 Macbook Pro (M1 Pro 32 GB RAM)
-cd8_tp2<-run_single_point_analysis_sub_gpu("exp3_clones/TCR_clones_ID03/",wellset1=get_well_subset(1:16,1:12),backend="numpy") # CD8 repertoire for time point 2 for COVID patient (left half of 384-well plate)
-print(cd8_tp2) # we got alpha-beta pairs!
-table(cd8_tp2$method) # note that same alpha-beta pairs can be called by different methods, so there are duplicates
-#expected output: 
-#madhype  tshell 
-#  16369    9891 
+```python
+import tirtl
+res = tirtl.run_single_point_analysis_sub_gpu(
+    "exp3_clones/TCR_clones_ID03/", prefix="cd8_tp2",
+    wellset1=tirtl.get_well_subset(range(1, 17), range(1, 13)))   # first 12 columns of the plate
+res["method"].value_counts()   # madhype 16369, tshell 9891 (identical to the R pipeline)
+```
+The parameters and the `{prefix}_TIRTLoutput.tsv` columns are those of the original R function (see below).
+The flat module `tirtl_functions.py` keeps working (`import tirtl_functions as tf`). It is backed by the package.
+
+The function also takes these optional parameters:
+
+| parameter | meaning |
+|---|---|
+| `engine="auto"` | `"sparse"`: fused Rust MAD-HYPE + T-SHELL kernel over shared wells (default when Rust is available, CPU). `"dense"`: float32 matrix products on `backend`, then exact float64 re-scoring |
+| `backend="numpy"` | `numpy` / `cupy` / `mlx`, used by the dense engine. Every backend gives byte-identical output; if a GPU library is missing, numpy is used with a warning |
+| `cpw=None` | cells per well for MAD-HYPE (default: QC clone threshold, as in R) |
+| `write_intermediates=False` | also write `{prefix}_bigmas.tsv`, `_bigmbs.tsv`, `_mdh.tsv` and the name files (original formats) |
+
+## TIRTLtools functions
+These functions have the same names, arguments and output tables as the TIRTLtools R package:
+```python
+tirtl.run_pairing(["plate1/", "plate2/"], "results/", "sample1", wellset=[wells1, wells2],
+                  tshell_settings=tirtl.get_tshell_settings("96_well"))   # one sample over several plates
+ds = tirtl.load_tirtlseq("results/", meta_columns=["donor", "timepoint"])
+ds = tirtl.clean_pairs(ds)
+tirtl.get_pair_stats(ds); tirtl.summarize_data(ds); tirtl.get_all_tcrs(ds, "paired")
+tirtl.calculate_diversity(ds, chain="beta")
+tirtl.get_expanded_clones(ds.data["d1_tp1"], ds.data["d1_tp2"])
+```
+* Filters: `filter_mait`, `filter_nonfunctional_TCRs`, `filter_short_cdr3s`, `remove_duplicates`.
+* Sample handling: `filter_dataset`, `combine_TIRTLseqData`, `add_metadata`.
+* Other: `get_paired_by_read_fraction_range`, and `create_thimble_df` / `write_stitchr_tsv`.
+
+The original TIRTL multi-run analyses are faithful to the R code and vectorised:
+* `run_longitudinal_analysis_sub`, `merge_TIRTL`, `add_sign`;
+* `concordance`;
+* `process_10x` / `get_clonotypes_10x`.
+
+TCRdist and TCR clustering are not part of this package. Use dedicated packages, for example tcrdist3 or python-igraph / leidenalg, on the paired tables (`get_all_tcrs(ds, "paired")`).
+
+## Differences from the original R code
+* **T-SHELL correlations are computed in float64.** R's numpy backend uses float32; the float64 value is exact and does not depend on the backend.
+* **Where float32 changes R's result.** On rare occasions R's float32 rounding changes a T-SHELL call. Two known cases:
+  * two correlations differ by less than about 1e-5 at the 3rd/4th place of the top-3;
+  * the float32 correlation rounds above 1 (e.g. `1.0000004`), which gives `NaN` p-values in R and drops all T-SHELL pairs of that alpha.
+* **The earlier Python port of this repository differed from R, and is now aligned with it:**
+  * extra `score > 0.1` clause in the T-SHELL filter;
+  * `pval_adj` fallback when fewer than 3 p-values;
+  * bisection instead of `uniroot`;
+  * alphabetical instead of first-appearance row order;
+  * file order and V/J tie-breaking not following R's collation.
+* **Upstream behaviours kept on purpose.** `filter_short_cdr3s` reproduces TIRTLtools, which uses only the alpha flag.
+
+## Tests
+```bash
+pytest tests                                   # unit + synthetic end-to-end tests (MAD-HYPE tables vs R, kernels, backends, TIRTLtools functions)
+python tests/check_backends.py <mixcr_folder>  # all available backends give identical output (e.g. on a Mac for MLX)
 ```
 
 ### Input for pairing pipeline
@@ -60,20 +96,20 @@ _min_reads_ (default=0) - minimum number of reads a clone to be included. By def
 
 _well_pos_ (default=3) - position of the well id in the file name if split by underbar. For example, if the file name is "3123233_MVP093_TIRTLseq_**A1**_S8.alpha_old_ID10.clones_TRA.tsv", the well_pos should be 4.
 
-_wellset1_ (default=get_well_subset(1:16,1:24)) - subset of wells to be analyzed (if you loaded your sample to part of the plate). By default all wells in 384 well plate are analyzed. For example, to analyze the first 12 columns of a 384-well plate, you can use get_well_subset(1:16,1:12).
+_wellset1_ (default=get_well_subset(range(1,17), range(1,25))) - subset of wells to be analyzed (if you loaded your sample to part of the plate). By default all wells in 384 well plate are analyzed. For example, to analyze the first 12 columns of a 384-well plate, you can use get_well_subset(range(1,17), range(1,13)).
 
-_compute_ (default=T) - whether to run backend script for pairing. Only set F if you want to run the python backend script separately.
+_compute_ (default=True) - whether to run the pairing. With False, the results of a separately run backend (_prefix_madhyperesults.csv_, _prefix_corresults.csv_) are read.
 
-_backend_ (default="numpy") - backend for the pairing. Can be "numpy" for CPU, "cupy" for Nvidia GPU, or "mlx" for Apple Silicon GPU.
+_backend_ (default="numpy") - array backend of the dense engine: "numpy" (CPU), "cupy" (NVIDIA GPU) or "mlx" (Apple Silicon GPU).
 
 _wij_thres_tshell_ (default=2) - threshold for the number of wells with both alpha and beta chains for T-SHELL method. Increasing this number will increase the stringency of the pairing, but may also decrease the number of pairs found. Recommended value for 96-well experiments is 3.
 
 _pval_thres_tshell_ (default=1e-10) - p-value threshold for the T-SHELL method. Recommended value for 96-well experiments is 1e-3.
 
-_pseudobulk_ (default=F) - this option generates pseudobulk files, a single file containing all merged TCRalpha and TCRbeta singlechain data aggregated across wells. Resulting files are written out with _pseudobulk_TRA.tsv and _pseudobulk_TRB.tsv suffixes.
+_pseudobulk_ (default=False) - this option generates pseudobulk files, a single file containing all merged TCRalpha and TCRbeta singlechain data aggregated across wells. Resulting files are written out with _pseudobulk_TRA.tsv and _pseudobulk_TRB.tsv suffixes.
 
 ### Output for pairing pipeline
-This will take TCRalpha and TCRbeta repertoires from the folder "data/" and pair them using the default parameters. The output will be saved in the working directory under _tmp_TIRTLoutput.tsv_ and also returned to R as _data.table_.
+This will take TCRalpha and TCRbeta repertoires from the folder "data/" and pair them using the default parameters. The output will be saved in the working directory under _tmp_TIRTLoutput.tsv_ and also returned as a pandas DataFrame.
 
 _wi_ - number of wells where alpha is found, but not beta
 

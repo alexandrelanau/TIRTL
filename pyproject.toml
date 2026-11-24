@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tirtl"
+version = "0.2.0"
+description = "TIRTL-seq paired TCR analysis (MAD-HYPE + T-SHELL) with Rust kernels and CPU / NVIDIA (cupy) / Apple (mlx) backends"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-3.0-or-later" }
+dependencies = ["numpy>=1.26", "pandas>=2.0", "scipy>=1.10"]
+
+[project.optional-dependencies]
+cupy = ["cupy-cuda12x>=13"]
+mlx = ["mlx>=0.13"]
+test = ["pytest>=7"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "tirtl._core"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,11 @@
+data/
+**__pycache__**
+target/
+python/tirtl/_core*.so
+python/tirtl/_core*.pyd
+*.egg-info/
+.pytest_cache/
+legacy/
+tutorial_output/
+*.ipynb_checkpoints
+tests/

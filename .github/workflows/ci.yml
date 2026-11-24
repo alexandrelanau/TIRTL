@@ -1,0 +1,31 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]  # macos-14 = Apple Silicon (arm64): Rust build + MLX backend
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and install (Rust extension)
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin pytest numpy pandas scipy
+          pip install -e .
+      - name: MLX (Apple Silicon only)
+        if: runner.os == 'macOS'
+        run: pip install mlx
+      - name: Tests (Rust)
+        run: python -m pytest -q tests
+      - name: Tests (pure-Python fallback)
+        env:
+          TIRTL_NO_RUST: "1"
+        run: python -m pytest -q tests/test_madhyper.py tests/test_kernels.py
+      - name: Backend consistency (synthetic plate)
+        run: python tests/check_backends.py
